@@ -53,12 +53,30 @@ func (e *JobDependencyError) Error() string {
 	return fmt.Sprintf("job %s depends on unknown job %s", e.Dependent.String(), e.Dependency.String())
 }
 
+func (e *JobDependencyError) Is(target error) bool {
+	t, ok := target.(*JobDependencyError)
+	if !ok {
+		return false
+	}
+
+	return e.Dependent == t.Dependent && e.Dependency == t.Dependency
+}
+
 type JobAlreadyScheduledError struct {
 	Job JobId
 }
 
 func (e *JobAlreadyScheduledError) Error() string {
 	return fmt.Sprintf("job %s has already been scheduled", e.Job)
+}
+
+func (e *JobAlreadyScheduledError) Is(target error) bool {
+	t, ok := target.(*JobAlreadyScheduledError)
+	if !ok {
+		return false
+	}
+
+	return e.Job == t.Job
 }
 
 type JobSystemAlreadyRunning struct{}
