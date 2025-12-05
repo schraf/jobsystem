@@ -1,3 +1,6 @@
+// Package jobsystem provides a concurrent job execution system with dependency management.
+// Jobs can be scheduled with dependencies on other jobs, and the system ensures
+// that jobs are executed only after their dependencies have completed.
 package jobsystem
 
 import (
@@ -13,29 +16,36 @@ import (
 //--== Job States
 //--=========================================================--
 
+// Job state constants represent the current state of a job in the system.
 const (
-	waiting  int32 = 0
-	blocked  int32 = 1
-	running  int32 = 2
-	finished int32 = 3
+	waiting  int32 = 0 // Job is waiting to be executed
+	blocked  int32 = 1 // Job is blocked waiting for dependency checks
+	running  int32 = 2 // Job is currently being executed
+	finished int32 = 3 // Job has completed execution
 )
 
 //--=========================================================--
 //--== Job Function
 //--=========================================================--
 
+// JobFunc is the function type that represents a job's work.
+// It receives a context and returns an error if the job fails.
 type JobFunc func(ctx context.Context) error
 
 //--=========================================================--
 //--== Job Identifier
 //--=========================================================--
 
+// JobId is a unique identifier for a job in the system.
+// It wraps a UUID to provide type-safe job identification.
 type JobId uuid.UUID
 
+// NewJobId generates a new unique job identifier.
 func NewJobId() JobId {
 	return JobId(uuid.New())
 }
 
+// String returns the string representation of the job identifier.
 func (j JobId) String() string {
 	return uuid.UUID(j).String()
 }
@@ -44,15 +54,19 @@ func (j JobId) String() string {
 //--== Errors
 //--=========================================================--
 
+// JobDependencyError is returned when a job is scheduled with a dependency
+// on a job that does not exist in the system.
 type JobDependencyError struct {
-	Dependent  JobId
-	Dependency JobId
+	Dependent  JobId // The job that has the invalid dependency
+	Dependency JobId // The job that was referenced but does not exist
 }
 
+// Error returns a string describing the dependency error.
 func (e *JobDependencyError) Error() string {
 	return fmt.Sprintf("job %s depends on unknown job %s", e.Dependent.String(), e.Dependency.String())
 }
 
+// Is implements error comparison for JobDependencyError.
 func (e *JobDependencyError) Is(target error) bool {
 	t, ok := target.(*JobDependencyError)
 	if !ok {
@@ -62,14 +76,18 @@ func (e *JobDependencyError) Is(target error) bool {
 	return e.Dependent == t.Dependent && e.Dependency == t.Dependency
 }
 
+// JobAlreadyScheduledError is returned when attempting to schedule a job
+// that has already been scheduled in the system.
 type JobAlreadyScheduledError struct {
-	Job JobId
+	Job JobId // The job identifier that was already scheduled
 }
 
+// Error returns a string describing that the job was already scheduled.
 func (e *JobAlreadyScheduledError) Error() string {
 	return fmt.Sprintf("job %s has already been scheduled", e.Job)
 }
 
+// Is implements error comparison for JobAlreadyScheduledError.
 func (e *JobAlreadyScheduledError) Is(target error) bool {
 	t, ok := target.(*JobAlreadyScheduledError)
 	if !ok {
@@ -79,8 +97,11 @@ func (e *JobAlreadyScheduledError) Is(target error) bool {
 	return e.Job == t.Job
 }
 
+// JobSystemAlreadyRunning is returned when attempting to run a job system
+// that is already running.
 type JobSystemAlreadyRunning struct{}
 
+// Error returns a string indicating the job system is already running.
 func (e *JobSystemAlreadyRunning) Error() string {
 	return "job system already running"
 }
@@ -89,24 +110,34 @@ func (e *JobSystemAlreadyRunning) Error() string {
 //--== Job System
 //--=========================================================--
 
+// job represents an individual job in the system with its state, dependencies, and function.
 type job struct {
 	state        atomic.Int32
 	dependencies []JobId
 	function     JobFunc
 }
 
+// JobSystem manages a collection of jobs and executes them concurrently
+// while respecting their dependencies. Jobs are executed only after all
+// their dependencies have completed successfully.
 type JobSystem struct {
 	jobs    map[JobId]*job
 	lock    sync.RWMutex
 	running atomic.Bool
 }
 
+// NewJobSystem creates and returns a new JobSystem instance.
 func NewJobSystem() *JobSystem {
 	return &JobSystem{
 		jobs: make(map[JobId]*job),
 	}
 }
 
+// ScheduleJob adds a new job to the system with the given identifier,
+// dependencies, and function. The job will not be executed until all
+// its dependencies have completed. Returns an error if:
+//   - Any dependency does not exist in the system (JobDependencyError)
+//   - The job has already been scheduled (JobAlreadyScheduledError)
 func (s *JobSystem) ScheduleJob(id JobId, dependencies []JobId, function JobFunc) error {
 	if err := s.validateDependencies(id, dependencies); err != nil {
 		return err
@@ -119,6 +150,11 @@ func (s *JobSystem) ScheduleJob(id JobId, dependencies []JobId, function JobFunc
 	return nil
 }
 
+// Run executes all scheduled jobs concurrently, respecting their dependencies.
+// Jobs are executed as soon as their dependencies are satisfied. The method
+// blocks until all jobs have completed or until one job returns an error.
+// If any job fails, execution stops and the error is returned.
+// Returns JobSystemAlreadyRunning if the system is already running.
 func (s *JobSystem) Run(ctx context.Context) error {
 	if !s.running.CompareAndSwap(false, true) {
 		return &JobSystemAlreadyRunning{}
@@ -165,6 +201,7 @@ func (s *JobSystem) Run(ctx context.Context) error {
 	return nil
 }
 
+// validateDependencies checks that all specified dependencies exist in the system.
 func (s *JobSystem) validateDependencies(dependent JobId, dependencies []JobId) error {
 	s.lock.RLock()
 	defer s.lock.RUnlock()
@@ -181,6 +218,7 @@ func (s *JobSystem) validateDependencies(dependent JobId, dependencies []JobId) 
 	return nil
 }
 
+// insertJob adds a new job to the system, ensuring it hasn't been scheduled before.
 func (s *JobSystem) insertJob(id JobId, dependencies []JobId, function JobFunc) error {
 	s.lock.Lock()
 	defer s.lock.Unlock()
@@ -199,6 +237,8 @@ func (s *JobSystem) insertJob(id JobId, dependencies []JobId, function JobFunc) 
 	return nil
 }
 
+// acquireJob finds and returns a job that is ready to run (all dependencies satisfied).
+// Returns nil if no ready job is available.
 func (s *JobSystem) acquireJob() *job {
 	s.lock.RLock()
 	defer s.lock.RUnlock()

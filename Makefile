@@ -12,6 +12,10 @@ test:
 	@echo "Running tests..."
 	@go test ./...
 
+doc:
+	@echo "Generating documentation..."
+	@go doc -all
+
 deps:
 	@echo "Installing dependencies..."
 	@go mod download
@@ -23,6 +27,7 @@ help:
 	@echo "  vet    - Vet the code"
 	@echo "  fmt    - Format the code"
 	@echo "  test   - Run tests"
+	@echo "  doc    - Generate documentation"
 	@echo "  deps   - Install dependencies"
 	@echo ""
 	@echo "  help   - Show this help message"
