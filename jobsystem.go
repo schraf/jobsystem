@@ -12,6 +12,10 @@ import (
 	"github.com/google/uuid"
 )
 
+const (
+	NoConcurrencyLimit = 0 // Do not limit the number of concurrently running jobs
+)
+
 //--=========================================================--
 //--== Job States
 //--=========================================================--
@@ -107,6 +111,47 @@ func (e *JobSystemAlreadyRunning) Error() string {
 }
 
 //--=========================================================--
+//--== Simple Semaphore
+//--=========================================================--
+
+type semaphore struct {
+	resource chan struct{}
+}
+
+func newSemaphore(count int) *semaphore {
+	sem := semaphore{}
+
+	if count > 0 {
+		sem.resource = make(chan struct{}, count)
+
+		for i := 0; i < count; i++ {
+			sem.resource <- struct{}{}
+		}
+	}
+
+	return &sem
+}
+
+func (s *semaphore) Acquire(ctx context.Context) error {
+	if s.resource != nil {
+		select {
+		case <-s.resource:
+			// Acquired resource
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+
+	return nil
+}
+
+func (s *semaphore) Release() {
+	if s.resource != nil {
+		s.resource <- struct{}{}
+	}
+}
+
+//--=========================================================--
 //--== Job System
 //--=========================================================--
 
@@ -153,9 +198,11 @@ func (s *JobSystem) ScheduleJob(id JobId, dependencies []JobId, function JobFunc
 // Run executes all scheduled jobs concurrently, respecting their dependencies.
 // Jobs are executed as soon as their dependencies are satisfied. The method
 // blocks until all jobs have completed or until one job returns an error.
-// If any job fails, execution stops and the error is returned.
+// If any job fails, execution stops and the error is returned. If the
+// concurrencyLimit is greater than 0, only that number of job will ever be
+// running at the same time.
 // Returns JobSystemAlreadyRunning if the system is already running.
-func (s *JobSystem) Run(ctx context.Context) error {
+func (s *JobSystem) Run(ctx context.Context, concurrencyLimit int) error {
 	if !s.running.CompareAndSwap(false, true) {
 		return &JobSystemAlreadyRunning{}
 	}
@@ -165,6 +212,8 @@ func (s *JobSystem) Run(ctx context.Context) error {
 	var startReadyJobs func()
 	var err atomic.Value
 
+	sem := newSemaphore(concurrencyLimit)
+
 	startReadyJobs = func() {
 		for readyJob := s.acquireJob(); readyJob != nil; readyJob = s.acquireJob() {
 			workers.Add(1)
@@ -172,13 +221,19 @@ func (s *JobSystem) Run(ctx context.Context) error {
 			go func(work *job) {
 				defer workers.Done()
 
-				work.state.Store(running)
+				if semError := sem.Acquire(ctx); semError != nil {
+					err.CompareAndSwap(nil, semError)
+				} else {
+					defer sem.Release()
 
-				if jobError := work.function(ctx); jobError != nil {
-					err.CompareAndSwap(nil, jobError)
+					work.state.Store(running)
+
+					if jobError := work.function(ctx); jobError != nil {
+						err.CompareAndSwap(nil, jobError)
+					}
+
+					work.state.Store(finished)
 				}
-
-				work.state.Store(finished)
 
 				if err.Load() == nil {
 					startReadyJobs()

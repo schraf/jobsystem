@@ -3,6 +3,7 @@ package jobsystem
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -69,7 +70,7 @@ func TestJobSystem_NoJobs(t *testing.T) {
 
 	system := NewJobSystem()
 
-	err = system.Run(ctx)
+	err = system.Run(ctx, NoConcurrencyLimit)
 	assert.NoError(t, err)
 }
 
@@ -84,7 +85,7 @@ func TestJobSystem_SingleSuccess(t *testing.T) {
 	err = job.ScheduleSuccess(system, nil)
 	assert.NoError(t, err)
 
-	err = system.Run(ctx)
+	err = system.Run(ctx, NoConcurrencyLimit)
 	assert.NoError(t, err)
 
 	assert.True(t, job.DidRun)
@@ -101,7 +102,7 @@ func TestJobSystem_SingleFailure(t *testing.T) {
 	err = job.ScheduleFailure(system, nil)
 	assert.NoError(t, err)
 
-	err = system.Run(ctx)
+	err = system.Run(ctx, NoConcurrencyLimit)
 	assert.ErrorIs(t, err, &TestJobError{Id: job.Id})
 
 	assert.True(t, job.DidRun)
@@ -149,7 +150,7 @@ func TestJobSystem_DependencyChain(t *testing.T) {
 	err = jobB.ScheduleSuccess(system, []JobId{jobA.Id})
 	assert.NoError(t, err)
 
-	err = system.Run(ctx)
+	err = system.Run(ctx, NoConcurrencyLimit)
 	assert.NoError(t, err)
 
 	assert.True(t, jobA.DidRun)
@@ -177,7 +178,7 @@ func TestJobSystem_DependencyChainWithFailure(t *testing.T) {
 	err = jobC.ScheduleSuccess(system, []JobId{jobB.Id})
 	assert.NoError(t, err)
 
-	err = system.Run(ctx)
+	err = system.Run(ctx, NoConcurrencyLimit)
 	assert.ErrorIs(t, err, &TestJobError{Id: jobB.Id})
 
 	assert.True(t, jobA.DidRun)
@@ -201,7 +202,7 @@ func TestJobSystem_Concurrency(t *testing.T) {
 	err = jobB.ScheduleSuccess(system, nil)
 	assert.NoError(t, err)
 
-	err = system.Run(ctx)
+	err = system.Run(ctx, NoConcurrencyLimit)
 	assert.NoError(t, err)
 
 	assert.True(t, jobA.DidRun)
@@ -230,7 +231,7 @@ func TestJobSystem_MultipleDependents(t *testing.T) {
 	err = jobC.ScheduleSuccess(system, []JobId{jobA.Id, jobB.Id})
 	assert.NoError(t, err)
 
-	err = system.Run(ctx)
+	err = system.Run(ctx, NoConcurrencyLimit)
 	assert.NoError(t, err)
 
 	assert.True(t, jobA.DidRun)
@@ -260,7 +261,7 @@ func TestJobSystem_MultipleDependencies(t *testing.T) {
 	err = jobC.ScheduleSuccess(system, []JobId{jobA.Id})
 	assert.NoError(t, err)
 
-	err = system.Run(ctx)
+	err = system.Run(ctx, NoConcurrencyLimit)
 	assert.NoError(t, err)
 
 	assert.True(t, jobA.DidRun)
@@ -282,14 +283,14 @@ func TestJobSystem_AlreadyRunning(t *testing.T) {
 
 	firstRun := make(chan struct{}, 1)
 	go func() {
-		err := system.Run(ctx)
+		err := system.Run(ctx, NoConcurrencyLimit)
 		assert.NoError(t, err)
 		firstRun <- struct{}{}
 	}()
 
 	time.Sleep(10 * time.Millisecond)
 
-	err = system.Run(ctx)
+	err = system.Run(ctx, NoConcurrencyLimit)
 	assert.ErrorIs(t, err, &JobSystemAlreadyRunning{})
 
 	<-firstRun
@@ -304,7 +305,7 @@ func TestJobSystem_MultipleSequentialRuns(t *testing.T) {
 	err := jobA.ScheduleSuccess(system, nil)
 	assert.NoError(t, err)
 
-	err = system.Run(ctx)
+	err = system.Run(ctx, NoConcurrencyLimit)
 	assert.NoError(t, err)
 	assert.True(t, jobA.DidRun)
 
@@ -313,7 +314,7 @@ func TestJobSystem_MultipleSequentialRuns(t *testing.T) {
 	err = jobB.ScheduleSuccess(system, nil)
 	assert.NoError(t, err)
 
-	err = system.Run(ctx)
+	err = system.Run(ctx, NoConcurrencyLimit)
 	assert.NoError(t, err)
 	assert.True(t, jobB.DidRun)
 }
@@ -341,7 +342,7 @@ func TestJobSystem_ContextCancellation(t *testing.T) {
 	// Start Run() in a goroutine
 	runErr := make(chan error, 1)
 	go func() {
-		runErr <- system.Run(ctx)
+		runErr <- system.Run(ctx, NoConcurrencyLimit)
 	}()
 
 	// Wait for job to start
@@ -387,7 +388,7 @@ func TestJobSystem_ContextTimeout(t *testing.T) {
 	// Start Run() in a goroutine
 	runErr := make(chan error, 1)
 	go func() {
-		runErr <- system.Run(ctx)
+		runErr <- system.Run(ctx, NoConcurrencyLimit)
 	}()
 
 	// Wait for job to start
@@ -411,7 +412,7 @@ func TestJobSystem_ScheduleWhileRunning(t *testing.T) {
 
 	runErr := make(chan error, 1)
 	go func() {
-		runErr <- system.Run(ctx)
+		runErr <- system.Run(ctx, NoConcurrencyLimit)
 	}()
 
 	// ensure system is running
@@ -440,4 +441,49 @@ func TestJobSystem_ScheduleWhileRunning(t *testing.T) {
 	assert.True(t, jobC.DidRun)
 
 	assert.Greater(t, jobC.StartTime, jobA.EndTime)
+}
+
+func TestJobSystem_MaxConcurrency(t *testing.T) {
+	ctx := context.Background()
+	system := NewJobSystem()
+
+	var runningCount atomic.Int32
+	var maxRunning atomic.Int32
+	var totalRan atomic.Int32
+
+	jobFunc := func(ctx context.Context) error {
+		runningCount.Add(1)
+		startTime := time.Now()
+
+		for time.Since(startTime) < 100*time.Millisecond {
+			current := runningCount.Load()
+			currentMax := maxRunning.Load()
+
+			if current > currentMax {
+				maxRunning.CompareAndSwap(currentMax, current)
+			}
+		}
+
+		runningCount.Add(-1)
+		totalRan.Add(1)
+
+		return nil
+	}
+
+	for i := 0; i < 10; i++ {
+		err := system.ScheduleJob(NewJobId(), nil, jobFunc)
+		assert.NoError(t, err)
+	}
+
+	concurrencyLimit := 2
+
+	err := system.Run(ctx, concurrencyLimit)
+	assert.NoError(t, err)
+
+	// Verify that at most 2 jobs ran concurrently
+	assert.LessOrEqual(t, maxRunning.Load(), int32(concurrencyLimit))
+	assert.Equal(t, int32(concurrencyLimit), maxRunning.Load())
+
+	// Verify that all jobs ran
+	assert.Equal(t, int32(10), totalRan.Load())
 }
