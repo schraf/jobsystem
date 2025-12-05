@@ -398,3 +398,46 @@ func TestJobSystem_ContextTimeout(t *testing.T) {
 	assert.Error(t, err)
 	assert.ErrorIs(t, err, context.DeadlineExceeded)
 }
+
+func TestJobSystem_ScheduleWhileRunning(t *testing.T) {
+	var err error
+
+	ctx := context.Background()
+	system := NewJobSystem()
+
+	jobA := NewTestJob(200 * time.Millisecond)
+	err = jobA.ScheduleSuccess(system, nil)
+	assert.NoError(t, err)
+
+	runErr := make(chan error, 1)
+	go func() {
+		runErr <- system.Run(ctx)
+	}()
+
+	// ensure system is running
+	time.Sleep(10 * time.Millisecond)
+
+	jobC := NewTestJob(10 * time.Millisecond)
+
+	jobB := NewTestJob(10 * time.Millisecond)
+	err = system.ScheduleJob(jobB.Id, nil, func(ctx context.Context) error {
+		err := jobC.ScheduleSuccess(system, []JobId{jobA.Id})
+		assert.NoError(t, err)
+
+		jobB.StartTime = time.Now()
+		time.Sleep(jobB.Duration)
+		jobB.EndTime = time.Now()
+		jobB.DidRun = true
+		return nil
+	})
+	assert.NoError(t, err)
+
+	err = <-runErr
+	assert.NoError(t, err)
+
+	assert.True(t, jobA.DidRun)
+	assert.True(t, jobB.DidRun)
+	assert.True(t, jobC.DidRun)
+
+	assert.Greater(t, jobC.StartTime, jobA.EndTime)
+}
