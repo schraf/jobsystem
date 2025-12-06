@@ -70,7 +70,7 @@ func TestJobSystem_NoJobs(t *testing.T) {
 
 	system := NewJobSystem()
 
-	err = system.Run(ctx, NoConcurrencyLimit)
+	err = system.Run(ctx, 1000)
 	assert.NoError(t, err)
 }
 
@@ -85,7 +85,7 @@ func TestJobSystem_SingleSuccess(t *testing.T) {
 	err = job.ScheduleSuccess(system, nil)
 	assert.NoError(t, err)
 
-	err = system.Run(ctx, NoConcurrencyLimit)
+	err = system.Run(ctx, 1000)
 	assert.NoError(t, err)
 
 	assert.True(t, job.DidRun)
@@ -102,7 +102,7 @@ func TestJobSystem_SingleFailure(t *testing.T) {
 	err = job.ScheduleFailure(system, nil)
 	assert.NoError(t, err)
 
-	err = system.Run(ctx, NoConcurrencyLimit)
+	err = system.Run(ctx, 1000)
 	assert.ErrorIs(t, err, &TestJobError{Id: job.Id})
 
 	assert.True(t, job.DidRun)
@@ -150,7 +150,7 @@ func TestJobSystem_DependencyChain(t *testing.T) {
 	err = jobB.ScheduleSuccess(system, []JobId{jobA.Id})
 	assert.NoError(t, err)
 
-	err = system.Run(ctx, NoConcurrencyLimit)
+	err = system.Run(ctx, 1000)
 	assert.NoError(t, err)
 
 	assert.True(t, jobA.DidRun)
@@ -178,7 +178,7 @@ func TestJobSystem_DependencyChainWithFailure(t *testing.T) {
 	err = jobC.ScheduleSuccess(system, []JobId{jobB.Id})
 	assert.NoError(t, err)
 
-	err = system.Run(ctx, NoConcurrencyLimit)
+	err = system.Run(ctx, 1000)
 	assert.ErrorIs(t, err, &TestJobError{Id: jobB.Id})
 
 	assert.True(t, jobA.DidRun)
@@ -202,7 +202,7 @@ func TestJobSystem_Concurrency(t *testing.T) {
 	err = jobB.ScheduleSuccess(system, nil)
 	assert.NoError(t, err)
 
-	err = system.Run(ctx, NoConcurrencyLimit)
+	err = system.Run(ctx, 1000)
 	assert.NoError(t, err)
 
 	assert.True(t, jobA.DidRun)
@@ -231,7 +231,7 @@ func TestJobSystem_MultipleDependents(t *testing.T) {
 	err = jobC.ScheduleSuccess(system, []JobId{jobA.Id, jobB.Id})
 	assert.NoError(t, err)
 
-	err = system.Run(ctx, NoConcurrencyLimit)
+	err = system.Run(ctx, 1000)
 	assert.NoError(t, err)
 
 	assert.True(t, jobA.DidRun)
@@ -261,7 +261,7 @@ func TestJobSystem_MultipleDependencies(t *testing.T) {
 	err = jobC.ScheduleSuccess(system, []JobId{jobA.Id})
 	assert.NoError(t, err)
 
-	err = system.Run(ctx, NoConcurrencyLimit)
+	err = system.Run(ctx, 1000)
 	assert.NoError(t, err)
 
 	assert.True(t, jobA.DidRun)
@@ -283,14 +283,14 @@ func TestJobSystem_AlreadyRunning(t *testing.T) {
 
 	firstRun := make(chan struct{}, 1)
 	go func() {
-		err := system.Run(ctx, NoConcurrencyLimit)
+		err := system.Run(ctx, 1000)
 		assert.NoError(t, err)
 		firstRun <- struct{}{}
 	}()
 
 	time.Sleep(10 * time.Millisecond)
 
-	err = system.Run(ctx, NoConcurrencyLimit)
+	err = system.Run(ctx, 1000)
 	assert.ErrorIs(t, err, &JobSystemAlreadyRunning{})
 
 	<-firstRun
@@ -305,7 +305,7 @@ func TestJobSystem_MultipleSequentialRuns(t *testing.T) {
 	err := jobA.ScheduleSuccess(system, nil)
 	assert.NoError(t, err)
 
-	err = system.Run(ctx, NoConcurrencyLimit)
+	err = system.Run(ctx, 1000)
 	assert.NoError(t, err)
 	assert.True(t, jobA.DidRun)
 
@@ -314,7 +314,7 @@ func TestJobSystem_MultipleSequentialRuns(t *testing.T) {
 	err = jobB.ScheduleSuccess(system, nil)
 	assert.NoError(t, err)
 
-	err = system.Run(ctx, NoConcurrencyLimit)
+	err = system.Run(ctx, 1000)
 	assert.NoError(t, err)
 	assert.True(t, jobB.DidRun)
 }
@@ -342,7 +342,7 @@ func TestJobSystem_ContextCancellation(t *testing.T) {
 	// Start Run() in a goroutine
 	runErr := make(chan error, 1)
 	go func() {
-		runErr <- system.Run(ctx, NoConcurrencyLimit)
+		runErr <- system.Run(ctx, 1000)
 	}()
 
 	// Wait for job to start
@@ -388,7 +388,7 @@ func TestJobSystem_ContextTimeout(t *testing.T) {
 	// Start Run() in a goroutine
 	runErr := make(chan error, 1)
 	go func() {
-		runErr <- system.Run(ctx, NoConcurrencyLimit)
+		runErr <- system.Run(ctx, 1000)
 	}()
 
 	// Wait for job to start
@@ -412,7 +412,7 @@ func TestJobSystem_ScheduleWhileRunning(t *testing.T) {
 
 	runErr := make(chan error, 1)
 	go func() {
-		runErr <- system.Run(ctx, NoConcurrencyLimit)
+		runErr <- system.Run(ctx, 1000)
 	}()
 
 	// ensure system is running
