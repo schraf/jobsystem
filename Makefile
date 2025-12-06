@@ -1,4 +1,4 @@
-all: vet test
+all: deps vet test
 
 vet:
 	@echo "Vetting code..."

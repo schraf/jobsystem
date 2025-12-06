@@ -48,8 +48,8 @@ func main() {
         return nil
     })
 
-    // Run all jobs
-    if err := system.Run(ctx); err != nil {
+    // Run all jobs with a concurrency limit of 10
+    if err := system.Run(ctx, 10); err != nil {
         fmt.Printf("Error: %v\n", err)
     }
 }
@@ -57,7 +57,11 @@ func main() {
 
 ## Features
 
-- Concurrent job execution
+- Concurrent job execution with configurable concurrency limits
 - Dependency management
 - Type-safe job identifiers
 - Error handling with custom error types
+
+## Concurrency Limits
+
+The `Run` method requires a `concurrencyLimit` parameter that specifies the maximum number of jobs that can run simultaneously. This limit must be greater than 0. The system uses a semaphore to enforce this limit, ensuring that resource usage is controlled even when many jobs are ready to execute.
